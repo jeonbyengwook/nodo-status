@@ -1,0 +1,473 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <meta name="theme-color" content="#0f172a">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="apple-mobile-web-app-title" content="노도대대 현황판">
+    <title>노도대대 유동병력 현황판</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        @import url('https://cdn.jsdelivr.net/gh/orioncactus/pretendard/dist/web/static/pretendard.css');
+        body {
+            font-family: 'Pretendard', -apple-system, BlinkMacSystemFont, sans-serif;
+            background-color: #0f172a;
+            color: #f8fafc;
+            -webkit-tap-highlight-color: transparent;
+        }
+        .facility-btn {
+            transition: all 0.15s cubic-bezier(0.4, 0, 0.2, 1);
+        }
+        .facility-btn:active {
+            transform: scale(0.95);
+        }
+        .facility-btn.active {
+            background-color: #064e3b;
+            border-color: #10b981;
+            box-shadow: 0 0 0 2px rgba(16, 185, 129, 0.4);
+        }
+        /* 스크롤바 숨김 */
+        .no-scrollbar::-webkit-scrollbar { display: none; }
+        .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+    </style>
+</head>
+<body class="min-h-screen flex flex-col">
+
+    <!-- 상단 헤더 (요청하신 2줄 제목 적용) -->
+    <header class="bg-slate-900/95 backdrop-blur border-b border-slate-800 sticky top-0 z-30 px-4 py-3.5">
+        <div class="max-w-4xl mx-auto flex items-center justify-between">
+            <div>
+                <div class="text-xs font-extrabold tracking-widest text-emerald-400 uppercase leading-tight">
+                    노도대대
+                </div>
+                <h1 class="text-xl font-black text-white tracking-tight leading-tight mt-0.5">
+                    유동병력 현황판
+                </h1>
+            </div>
+            <div class="flex items-center gap-2">
+                <span id="live-clock" class="text-xs font-mono text-slate-400 bg-slate-800 px-2.5 py-1.5 rounded-lg border border-slate-700">00:00:00</span>
+                <button onclick="openInstallModal()" class="text-xs bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 px-2.5 py-1.5 rounded-lg font-semibold">
+                    앱 설치법
+                </button>
+            </div>
+        </div>
+
+        <!-- 모드 전환 탭 (병사용 / 통제자용) -->
+        <div class="max-w-4xl mx-auto mt-3 grid grid-cols-2 gap-1.5 bg-slate-950 p-1 rounded-xl border border-slate-800">
+            <button id="tab-soldier" onclick="switchTab('soldier')" class="py-2 text-sm font-bold rounded-lg bg-emerald-600 text-white shadow transition">
+                📱 내 위치 보고 (병사)
+            </button>
+            <button id="tab-admin" onclick="switchTab('admin')" class="py-2 text-sm font-bold rounded-lg text-slate-400 hover:text-white transition">
+                📊 전체 상황판 (통제자)
+            </button>
+        </div>
+    </header>
+
+    <!-- 메인 컨테이너 -->
+    <main class="flex-1 max-w-4xl w-full mx-auto p-4 pb-20">
+
+        <!-- ================= 1. 병사 조작 화면 ================= -->
+        <section id="view-soldier" class="space-y-4">
+            
+            <!-- 최초 1회 소속/이름 등록 카드 -->
+            <div id="profile-form-card" class="bg-slate-900 border border-slate-800 rounded-2xl p-4 shadow-lg">
+                <h2 class="text-sm font-bold text-slate-300 mb-3 flex items-center gap-1.5">
+                    <span class="w-2 h-2 rounded-full bg-emerald-500"></span>
+                    병사 개인정보 등록 (최초 1회)
+                </h2>
+                <div class="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
+                    <select id="input-company" class="bg-slate-800 border border-slate-700 text-white text-sm rounded-xl px-3 py-3 focus:outline-none focus:border-emerald-500 font-semibold">
+                        <option value="1중대">1중대</option>
+                        <option value="2중대">2중대</option>
+                        <option value="3중대">3중대</option>
+                        <option value="본부중대">본부중대</option>
+                    </select>
+                    <input type="text" id="input-name" placeholder="계급 및 이름 (예: 상병 홍길동)" class="sm:col-span-2 bg-slate-800 border border-slate-700 text-white text-sm rounded-xl px-3.5 py-3 focus:outline-none focus:border-emerald-500">
+                </div>
+                <button onclick="saveProfile()" class="mt-3 w-full bg-emerald-600 hover:bg-emerald-500 text-white font-bold py-3 rounded-xl text-sm shadow transition">
+                    등록 완료 및 시작하기
+                </button>
+            </div>
+
+            <!-- 등록 완료 후 표시되는 내 상태 배너 -->
+            <div id="profile-active-card" class="hidden bg-slate-900 border border-slate-800 rounded-2xl p-4 flex items-center justify-between">
+                <div>
+                    <div class="flex items-center gap-2">
+                        <span id="badge-company" class="text-xs font-extrabold px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-400 border border-emerald-500/30">1중대</span>
+                        <span id="display-name" class="text-base font-extrabold text-white">상병 홍길동</span>
+                    </div>
+                    <p class="text-xs text-slate-400 mt-1">
+                        현재 보고 위치: <strong id="display-current-loc" class="text-emerald-400 font-bold">미보고</strong>
+                        <span id="display-last-time" class="text-slate-500 ml-1"></span>
+                    </p>
+                </div>
+                <button onclick="editProfile()" class="text-xs text-slate-400 hover:text-white bg-slate-800 px-3 py-2 rounded-lg border border-slate-700">
+                    정보수정
+                </button>
+            </div>
+
+            <!-- 15개 시설 원터치 버튼 영역 -->
+            <div id="facility-buttons-wrapper" class="hidden">
+                <div class="flex items-center justify-between mb-2.5 px-1">
+                    <span class="text-xs font-bold text-slate-400">이동할 장소/활동을 터치하세요 (15개 구역)</span>
+                    <span class="text-[11px] text-emerald-400">● 원터치 즉시 반영</span>
+                </div>
+                <div id="facility-grid" class="grid grid-cols-3 gap-2.5">
+                    <!-- JS로 15개 버튼 자동 생성 -->
+                </div>
+            </div>
+        </section>
+
+        <!-- ================= 2. 통제자 상황판 화면 ================= -->
+        <section id="view-admin" class="hidden space-y-4">
+            
+            <!-- 상단 요약 KPI -->
+            <div class="grid grid-cols-4 gap-2">
+                <div class="bg-slate-900 border border-slate-800 rounded-xl p-3 text-center">
+                    <div class="text-[11px] text-slate-400 font-semibold">보고 총원</div>
+                    <div id="stat-total" class="text-xl font-black text-white mt-0.5">0</div>
+                </div>
+                <div class="bg-slate-900 border border-slate-800 rounded-xl p-3 text-center">
+                    <div class="text-[11px] text-slate-400 font-semibold">영내 활동</div>
+                    <div id="stat-inside" class="text-xl font-black text-emerald-400 mt-0.5">0</div>
+                </div>
+                <div class="bg-slate-900 border border-slate-800 rounded-xl p-3 text-center">
+                    <div class="text-[11px] text-slate-400 font-semibold">경계근무</div>
+                    <div id="stat-guard" class="text-xl font-black text-amber-400 mt-0.5">0</div>
+                </div>
+                <div class="bg-slate-900 border border-slate-800 rounded-xl p-3 text-center">
+                    <div class="text-[11px] text-slate-400 font-semibold">외출·외박</div>
+                    <div id="stat-outside" class="text-xl font-black text-rose-400 mt-0.5">0</div>
+                </div>
+            </div>
+
+            <!-- 중대 필터 및 검색/테스트 컨트롤 -->
+            <div class="bg-slate-900 border border-slate-800 rounded-2xl p-3 space-y-2.5">
+                <div class="flex gap-1.5 overflow-x-auto no-scrollbar" id="company-filters">
+                    <button onclick="setCompanyFilter('ALL')" data-filter="ALL" class="filter-btn px-3 py-1.5 rounded-lg text-xs font-bold bg-emerald-600 text-white whitespace-nowrap">전체</button>
+                    <button onclick="setCompanyFilter('1중대')" data-filter="1중대" class="filter-btn px-3 py-1.5 rounded-lg text-xs font-bold bg-slate-800 text-slate-300 whitespace-nowrap">1중대</button>
+                    <button onclick="setCompanyFilter('2중대')" data-filter="2중대" class="filter-btn px-3 py-1.5 rounded-lg text-xs font-bold bg-slate-800 text-slate-300 whitespace-nowrap">2중대</button>
+                    <button onclick="setCompanyFilter('3중대')" data-filter="3중대" class="filter-btn px-3 py-1.5 rounded-lg text-xs font-bold bg-slate-800 text-slate-300 whitespace-nowrap">3중대</button>
+                    <button onclick="setCompanyFilter('본부중대')" data-filter="본부중대" class="filter-btn px-3 py-1.5 rounded-lg text-xs font-bold bg-slate-800 text-slate-300 whitespace-nowrap">본부중대</button>
+                </div>
+                <div class="flex gap-2">
+                    <input type="text" id="search-soldier" oninput="renderDashboard()" placeholder="이름 또는 계급 검색..." class="flex-1 bg-slate-800 border border-slate-700 text-white text-xs rounded-lg px-3 py-2 focus:outline-none focus:border-emerald-500">
+                    <button onclick="loadSampleData()" class="px-2.5 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 rounded-lg text-xs font-semibold whitespace-nowrap">
+                        가상인원 생성
+                    </button>
+                    <button onclick="clearAllData()" class="px-2.5 py-2 bg-rose-950/60 hover:bg-rose-900/60 text-rose-300 border border-rose-800/50 rounded-lg text-xs font-semibold whitespace-nowrap">
+                        초기화
+                    </button>
+                </div>
+            </div>
+
+            <!-- 15개 시설별 현황판 그리드 -->
+            <div id="dashboard-grid" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+                <!-- JS로 15개 구역 카드 자동 렌더링 -->
+            </div>
+        </section>
+    </main>
+
+    <!-- 하단 알림 토스트 -->
+    <div id="toast" class="fixed bottom-5 left-1/2 -translate-x-1/2 bg-emerald-600 text-white text-xs font-bold px-4 py-2.5 rounded-full shadow-xl opacity-0 pointer-events-none transition-opacity duration-200 z-50">
+        보고 완료
+    </div>
+
+    <!-- 스마트폰 앱 설치 안내 모달 -->
+    <div id="install-modal" class="hidden fixed inset-0 bg-black/75 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+        <div class="bg-slate-900 border border-slate-700 rounded-2xl max-w-sm w-full p-5 space-y-4">
+            <div class="flex justify-between items-center">
+                <h3 class="text-base font-extrabold text-white">📱 스마트폰 홈 화면에 앱 추가</h3>
+                <button onclick="closeInstallModal()" class="text-slate-400 hover:text-white text-lg font-bold">✕</button>
+            </div>
+            <div class="space-y-3 text-xs text-slate-300 leading-relaxed">
+                <div class="bg-slate-800/80 p-3 rounded-xl">
+                    <p class="font-bold text-emerald-400 mb-1">🍎 아이폰 (Safari)</p>
+                    <p>화면 하단 <strong>공유 버튼(□↑)</strong> 터치 → 아래로 내려 <strong>[홈 화면에 추가]</strong> 선택</p>
+                </div>
+                <div class="bg-slate-800/80 p-3 rounded-xl">
+                    <p class="font-bold text-emerald-400 mb-1">🤖 갤럭시 (Chrome / 삼성인터넷)</p>
+                    <p>우측 상단 <strong>메뉴(⋮ 또는 ≡)</strong> 터치 → <strong>[홈 화면에 추가]</strong> 또는 <strong>[앱 설치]</strong> 선택</p>
+                </div>
+            </div>
+            <button onclick="closeInstallModal()" class="w-full py-2.5 bg-emerald-600 text-white font-bold rounded-xl text-xs">확인</button>
+        </div>
+    </div>
+
+    <script>
+        // 15개 지정 시설 목록 및 아이콘
+        const FACILITIES = [
+            { name: '생활관', icon: '🛏️', type: 'inside' },
+            { name: '식당', icon: '🍚', type: 'inside' },
+            { name: '화장실', icon: '🚻', type: 'inside' },
+            { name: '샤워장', icon: '🚿', type: 'inside' },
+            { name: '흡연장', icon: '🚬', type: 'inside' },
+            { name: '사지방', icon: '💻', type: 'inside' },
+            { name: '도서관', icon: '📚', type: 'inside' },
+            { name: '휴게실', icon: '🛋️', type: 'inside' },
+            { name: 'PX', icon: '🏪', type: 'inside' },
+            { name: '체단실', icon: '🏋️', type: 'inside' },
+            { name: '풋살장', icon: '⚽', type: 'inside' },
+            { name: '경계근무', icon: '🪖', type: 'guard' },
+            { name: '종교', icon: '⛪', type: 'inside' },
+            { name: '외출', icon: '🚶', type: 'outside' },
+            { name: '외박', icon: '🎒', type: 'outside' }
+        ];
+
+        const COMPANY_BADGE = {
+            '1중대': 'bg-blue-500/20 text-blue-300 border-blue-500/30',
+            '2중대': 'bg-emerald-500/20 text-emerald-300 border-emerald-500/30',
+            '3중대': 'bg-amber-500/20 text-amber-300 border-amber-500/30',
+            '본부중대': 'bg-purple-500/20 text-purple-300 border-purple-500/30'
+        };
+
+        // 상태 저장소 (실제 부대 다중 접속 시 Firebase Realtime DB로 교체 연결 가능)
+        let soldiersData = JSON.parse(localStorage.getItem('nodo_soldiers_db') || '{}');
+        let myProfile = JSON.parse(localStorage.getItem('nodo_my_profile') || 'null');
+        let currentFilter = 'ALL';
+
+        // 초기화
+        window.onload = function() {
+            updateClock();
+            setInterval(updateClock, 1000);
+            renderFacilityButtons();
+            
+            if (myProfile) {
+                applyProfileUI();
+            }
+            renderDashboard();
+        };
+
+        function updateClock() {
+            const now = new Date();
+            document.getElementById('live-clock').textContent = now.toTimeString().split(' ')[0];
+        }
+
+        function getCurrentTimeStr() {
+            const now = new Date();
+            return String(now.getHours()).padStart(2, '0') + ':' + String(now.getMinutes()).padStart(2, '0');
+        }
+
+        // 탭 전환
+        function switchTab(tab) {
+            const isSoldier = tab === 'soldier';
+            document.getElementById('view-soldier').classList.toggle('hidden', !isSoldier);
+            document.getElementById('view-admin').classList.toggle('hidden', isSoldier);
+
+            document.getElementById('tab-soldier').className = isSoldier
+                ? 'py-2 text-sm font-bold rounded-lg bg-emerald-600 text-white shadow transition'
+                : 'py-2 text-sm font-bold rounded-lg text-slate-400 hover:text-white transition';
+            document.getElementById('tab-admin').className = !isSoldier
+                ? 'py-2 text-sm font-bold rounded-lg bg-emerald-600 text-white shadow transition'
+                : 'py-2 text-sm font-bold rounded-lg text-slate-400 hover:text-white transition';
+
+            if (!isSoldier) renderDashboard();
+        }
+
+        // 프로필 저장
+        function saveProfile() {
+            const company = document.getElementById('input-company').value;
+            const name = document.getElementById('input-name').value.trim();
+            if (!name) {
+                alert('계급과 이름을 입력해주세요. (예: 상병 홍길동)');
+                return;
+            }
+            myProfile = { company, name };
+            localStorage.setItem('nodo_my_profile', JSON.stringify(myProfile));
+            applyProfileUI();
+            showToast(`${company} ${name} 등록 완료`);
+        }
+
+        function editProfile() {
+            document.getElementById('profile-form-card').classList.remove('hidden');
+            document.getElementById('profile-active-card').classList.add('hidden');
+            document.getElementById('facility-buttons-wrapper').classList.add('hidden');
+            if (myProfile) {
+                document.getElementById('input-company').value = myProfile.company;
+                document.getElementById('input-name').value = myProfile.name;
+            }
+        }
+
+        function applyProfileUI() {
+            document.getElementById('profile-form-card').classList.add('hidden');
+            document.getElementById('profile-active-card').classList.remove('hidden');
+            document.getElementById('facility-buttons-wrapper').classList.remove('hidden');
+
+            const badge = document.getElementById('badge-company');
+            badge.textContent = myProfile.company;
+            badge.className = `text-xs font-extrabold px-2 py-0.5 rounded border ${COMPANY_BADGE[myProfile.company]}`;
+            document.getElementById('display-name').textContent = myProfile.name;
+
+            const id = `${myProfile.company}_${myProfile.name}`;
+            if (soldiersData[id]) {
+                document.getElementById('display-current-loc').textContent = soldiersData[id].location;
+                document.getElementById('display-last-time').textContent = `(${soldiersData[id].time})`;
+                highlightActiveButton(soldiersData[id].location);
+            }
+        }
+
+        // 15개 시설 버튼 렌더링
+        function renderFacilityButtons() {
+            const grid = document.getElementById('facility-grid');
+            grid.innerHTML = FACILITIES.map(f => `
+                <button onclick="reportLocation('${f.name}')" id="btn-loc-${f.name}"
+                    class="facility-btn bg-slate-900 hover:bg-slate-800 border border-slate-800 rounded-2xl p-3.5 flex flex-col items-center justify-center gap-1.5 shadow">
+                    <span class="text-2xl">${f.icon}</span>
+                    <span class="text-xs font-bold text-slate-200">${f.name}</span>
+                </button>
+            `).join('');
+        }
+
+        function highlightActiveButton(locName) {
+            document.querySelectorAll('.facility-btn').forEach(btn => btn.classList.remove('active'));
+            const activeBtn = document.getElementById(`btn-loc-${locName}`);
+            if (activeBtn) activeBtn.classList.add('active');
+        }
+
+        // 위치 보고 실행
+        function reportLocation(location) {
+            if (!myProfile) return;
+            const time = getCurrentTimeStr();
+            const id = `${myProfile.company}_${myProfile.name}`;
+
+            soldiersData[id] = {
+                company: myProfile.company,
+                name: myProfile.name,
+                location: location,
+                time: time
+            };
+
+            localStorage.setItem('nodo_soldiers_db', JSON.stringify(soldiersData));
+
+            document.getElementById('display-current-loc').textContent = location;
+            document.getElementById('display-last-time').textContent = `(${time})`;
+            highlightActiveButton(location);
+
+            if (navigator.vibrate) navigator.vibrate(40);
+            showToast(`📍 [${location}] 이동 보고 완료 (${time})`);
+            renderDashboard();
+        }
+
+        // 중대 필터 변경
+        function setCompanyFilter(company) {
+            currentFilter = company;
+            document.querySelectorAll('.filter-btn').forEach(btn => {
+                const isSelected = btn.dataset.filter === company;
+                btn.className = isSelected
+                    ? 'filter-btn px-3 py-1.5 rounded-lg text-xs font-bold bg-emerald-600 text-white whitespace-nowrap'
+                    : 'filter-btn px-3 py-1.5 rounded-lg text-xs font-bold bg-slate-800 text-slate-300 whitespace-nowrap';
+            });
+            renderDashboard();
+        }
+
+        // 통제자 상황판 렌더링
+        function renderDashboard() {
+            const searchQuery = document.getElementById('search-soldier').value.trim().toLowerCase();
+            const allList = Object.values(soldiersData);
+
+            // 필터링된 병력
+            const filtered = allList.filter(s => {
+                const matchCompany = currentFilter === 'ALL' || s.company === currentFilter;
+                const matchSearch = !searchQuery || s.name.toLowerCase().includes(searchQuery) || s.company.includes(searchQuery);
+                return matchCompany && matchSearch;
+            });
+
+            // 상단 통계 업데이트
+            let insideCount = 0, guardCount = 0, outsideCount = 0;
+            filtered.forEach(s => {
+                const fac = FACILITIES.find(f => f.name === s.location);
+                if (!fac) return;
+                if (fac.type === 'guard') guardCount++;
+                else if (fac.type === 'outside') outsideCount++;
+                else insideCount++;
+            });
+
+            document.getElementById('stat-total').textContent = filtered.length;
+            document.getElementById('stat-inside').textContent = insideCount;
+            document.getElementById('stat-guard').textContent = guardCount;
+            document.getElementById('stat-outside').textContent = outsideCount;
+
+            // 15개 구역 카드 렌더링
+            const grid = document.getElementById('dashboard-grid');
+            grid.innerHTML = FACILITIES.map(fac => {
+                const peopleHere = filtered.filter(s => s.location === fac.name);
+                const count = peopleHere.length;
+
+                const badgesHtml = count > 0
+                    ? peopleHere.map(p => `
+                        <div class="flex items-center justify-between bg-slate-800/90 border border-slate-700/80 px-2.5 py-1.5 rounded-lg text-xs">
+                            <div class="flex items-center gap-1.5">
+                                <span class="text-[10px] font-bold px-1.5 py-0.5 rounded border ${COMPANY_BADGE[p.company]}">${p.company}</span>
+                                <span class="font-bold text-slate-100">${p.name}</span>
+                            </div>
+                            <span class="text-[10px] font-mono text-slate-400">${p.time}</span>
+                        </div>
+                    `).join('')
+                    : `<div class="text-center py-4 text-[11px] text-slate-600">인원 없음</div>`;
+
+                return `
+                    <div class="bg-slate-900 border ${count > 0 ? 'border-slate-700' : 'border-slate-800/70'} rounded-2xl p-3.5 flex flex-col">
+                        <div class="flex items-center justify-between pb-2.5 mb-2.5 border-b border-slate-800">
+                            <div class="flex items-center gap-1.5">
+                                <span class="text-base">${fac.icon}</span>
+                                <h3 class="text-sm font-extrabold text-slate-200">${fac.name}</h3>
+                            </div>
+                            <span class="text-xs font-black px-2 py-0.5 rounded-full ${count > 0 ? 'bg-emerald-500/20 text-emerald-400' : 'bg-slate-800 text-slate-500'}">
+                                ${count}명
+                            </span>
+                        </div>
+                        <div class="space-y-1.5 flex-1">
+                            ${badgesHtml}
+                        </div>
+                    </div>
+                `;
+            }).join('');
+        }
+
+        // 테스트용 가상 인원 생성
+        function loadSampleData() {
+            const samples = [
+                { company: '1중대', name: '병장 김민수', location: '생활관' },
+                { company: '1중대', name: '상병 이준호', location: 'PX' },
+                { company: '1중대', name: '일병 박서준', location: '경계근무' },
+                { company: '2중대', name: '병장 최현우', location: '체단실' },
+                { company: '2중대', name: '상병 정우성', location: '풋살장' },
+                { company: '2중대', name: '이병 강동원', location: '식당' },
+                { company: '3중대', name: '상병 조인성', location: '사지방' },
+                { company: '3중대', name: '일병 현빈', location: '흡연장' },
+                { company: '3중대', name: '병장 공유', location: '외출' },
+                { company: '본부중대', name: '상병 송중기', location: '도서관' },
+                { company: '본부중대', name: '일병 박보검', location: '휴게실' },
+                { company: '본부중대', name: '병장 남주혁', location: '외박' }
+            ];
+            const time = getCurrentTimeStr();
+            samples.forEach(s => {
+                soldiersData[`${s.company}_${s.name}`] = { ...s, time };
+            });
+            localStorage.setItem('nodo_soldiers_db', JSON.stringify(soldiersData));
+            renderDashboard();
+            showToast('가상 유동병력 12명 배치 완료');
+        }
+
+        function clearAllData() {
+            if (!confirm('상황판의 모든 병력 현황을 초기화하시겠습니까?')) return;
+            soldiersData = {};
+            localStorage.removeItem('nodo_soldiers_db');
+            renderDashboard();
+            showToast('현황판 초기화 완료');
+        }
+
+        function showToast(msg) {
+            const toast = document.getElementById('toast');
+            toast.textContent = msg;
+            toast.classList.remove('opacity-0');
+            setTimeout(() => toast.classList.add('opacity-0'), 2000);
+        }
+
+        function openInstallModal() { document.getElementById('install-modal').classList.remove('hidden'); }
+        function closeInstallModal() { document.getElementById('install-modal').classList.add('hidden'); }
+    </script>
+</body>
+</html>
