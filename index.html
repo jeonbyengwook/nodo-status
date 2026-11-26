@@ -38,8 +38,13 @@
     <header class="bg-slate-900/95 backdrop-blur border-b border-slate-800 sticky top-0 z-30 px-4 py-3.5">
         <div class="max-w-4xl mx-auto flex items-center justify-between">
             <div>
-                <div class="text-xs font-extrabold tracking-widest text-emerald-400 uppercase leading-tight">
-                    노도대대
+                <div class="flex items-center gap-2">
+                    <span class="text-xs font-extrabold tracking-widest text-emerald-400 uppercase leading-tight">
+                        노도대대
+                    </span>
+                    <span id="sync-status" class="text-[10px] font-bold px-2 py-0.5 rounded-full bg-amber-500/20 text-amber-300 border border-amber-500/30">
+                        🟡 서버 연결 중...
+                    </span>
                 </div>
                 <h1 class="text-xl font-black text-white tracking-tight leading-tight mt-0.5">
                     유동병력 현황판
@@ -112,11 +117,9 @@
             <div id="facility-buttons-wrapper" class="hidden">
                 <div class="flex items-center justify-between mb-2.5 px-1">
                     <span class="text-xs font-bold text-slate-400">이동할 장소/활동을 터치하세요 (15개 구역)</span>
-                    <span class="text-[11px] text-emerald-400">● 매일 00시 자동 초기화</span>
+                    <span class="text-[11px] text-emerald-400">● 상황판 실시간 동기화</span>
                 </div>
-                <div id="facility-grid" class="grid grid-cols-3 gap-2.5">
-                    <!-- JS로 15개 버튼 자동 생성 -->
-                </div>
+                <div id="facility-grid" class="grid grid-cols-3 gap-2.5"></div>
             </div>
         </section>
 
@@ -143,7 +146,7 @@
                 </div>
             </div>
 
-            <!-- 중대 필터 및 검색/테스트 컨트롤 -->
+            <!-- 중대 필터 및 검색/컨트롤 -->
             <div class="bg-slate-900 border border-slate-800 rounded-2xl p-3 space-y-2.5">
                 <div class="flex gap-1.5 overflow-x-auto no-scrollbar" id="company-filters">
                     <button onclick="setCompanyFilter('ALL')" data-filter="ALL" class="filter-btn px-3 py-1.5 rounded-lg text-xs font-bold bg-emerald-600 text-white whitespace-nowrap">전체</button>
@@ -164,9 +167,7 @@
             </div>
 
             <!-- 15개 시설별 현황판 그리드 -->
-            <div id="dashboard-grid" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-                <!-- JS로 15개 구역 카드 자동 렌더링 -->
-            </div>
+            <div id="dashboard-grid" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3"></div>
         </section>
     </main>
 
@@ -196,12 +197,26 @@
         </div>
     </div>
 
-    <script>
-        const STORAGE_KEYS = {
-            SOLDIERS: 'nodo_soldiers_db',
-            PROFILE: 'nodo_my_profile',
-            DATE: 'nodo_board_date'
+    <!-- Firebase SDK (Realtime Database) -->
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.0.2/firebase-app.js";
+        import { getDatabase, ref, set, update, remove, onValue, off } from "https://www.gstatic.com/firebasejs/11.0.2/firebase-database.js";
+
+        // =====================================================================
+        // 👇 [필수 설정] Firebase 콘솔에서 발급받은 본인 프로젝트 설정을 붙여넣으세요
+        // =====================================================================
+        const firebaseConfig = {
+            apiKey: "여기에_API_KEY_입력",
+            authDomain: "여기에_PROJECT_ID.firebaseapp.com",
+            databaseURL: "https://여기에_PROJECT_ID-default-rtdb.asia-southeast1.firebasedatabase.app",
+            projectId: "여기에_PROJECT_ID",
+            storageBucket: "여기에_PROJECT_ID.firebasestorage.app",
+            messagingSenderId: "여기에_SENDER_ID",
+            appId: "여기에_APP_ID"
         };
+        // =====================================================================
+
+        const STORAGE_PROFILE_KEY = 'nodo_my_profile';
 
         const FACILITIES = [
             { name: '생활관', icon: '🛏️', type: 'inside' },
@@ -228,11 +243,14 @@
             '본부중대': 'bg-purple-500/20 text-purple-300 border-purple-500/30'
         };
 
+        let db = null;
+        let currentRef = null;
+        let activeDateKey = '';
         let soldiersData = {};
-        let myProfile = JSON.parse(localStorage.getItem(STORAGE_KEYS.PROFILE) || 'null');
+        let myProfile = JSON.parse(localStorage.getItem(STORAGE_PROFILE_KEY) || 'null');
         let currentFilter = 'ALL';
 
-        // 오늘 날짜 문자열 반환 (YYYY-MM-DD)
+        // 오늘 날짜 (YYYY-MM-DD)
         function getTodayKey() {
             const now = new Date();
             const y = now.getFullYear();
@@ -241,68 +259,70 @@
             return `${y}-${m}-${d}`;
         }
 
-        // 날짜 변경 여부 확인 및 일일 자동 초기화
-        function checkDailyReset(notifyUser = false) {
+        // Firebase 실시간 리스너 연결 (날짜별 자동 분리)
+        function connectFirebaseForToday(notifyReset = false) {
             const today = getTodayKey();
-            const savedDate = localStorage.getItem(STORAGE_KEYS.DATE);
+            document.getElementById('current-date-label').textContent = `기준일자: ${today} (실시간 공유)`;
 
-            document.getElementById('current-date-label').textContent = `기준일자: ${today}`;
+            if (activeDateKey === today && currentRef) return;
 
-            if (!savedDate) {
-                localStorage.setItem(STORAGE_KEYS.DATE, today);
-                soldiersData = JSON.parse(localStorage.getItem(STORAGE_KEYS.SOLDIERS) || '{}');
-                return false;
+            if (currentRef) {
+                off(currentRef);
             }
 
-            if (savedDate !== today) {
-                // 날짜가 바뀌었으므로 상황판 데이터 초기화
-                soldiersData = {};
-                localStorage.setItem(STORAGE_KEYS.SOLDIERS, JSON.stringify(soldiersData));
-                localStorage.setItem(STORAGE_KEYS.DATE, today);
-
-                resetSoldierStatusUI();
-                renderDashboard();
-
-                if (notifyUser) {
-                    showToast(`🔄 새 날짜(${today})가 되어 현황판이 자동 초기화되었습니다.`);
-                }
-                return true;
-            }
-
-            soldiersData = JSON.parse(localStorage.getItem(STORAGE_KEYS.SOLDIERS) || '{}');
-            return false;
-        }
-
-        function saveSoldiersData() {
-            localStorage.setItem(STORAGE_KEYS.DATE, getTodayKey());
-            localStorage.setItem(STORAGE_KEYS.SOLDIERS, JSON.stringify(soldiersData));
-        }
-
-        function resetSoldierStatusUI() {
-            document.getElementById('display-current-loc').textContent = '미보고';
-            document.getElementById('display-last-time').textContent = '';
-            document.querySelectorAll('.facility-btn').forEach(btn => btn.classList.remove('active'));
-        }
-
-        // 초기화
-        window.onload = function() {
-            updateClock();
-            renderFacilityButtons();
-            checkDailyReset(false);
-
-            if (myProfile) {
-                applyProfileUI();
-            }
+            activeDateKey = today;
+            soldiersData = {};
             renderDashboard();
+            if (myProfile) applyProfileUI();
 
-            // 1초마다 시계 갱신, 30초마다 자정(날짜 변경) 체크
-            setInterval(updateClock, 1000);
-            setInterval(() => {
-                if (checkDailyReset(true)) {
-                    if (myProfile) applyProfileUI();
+            if (notifyReset) {
+                showToast(`🔄 새 날짜(${today})가 되어 현황판이 자동 초기화되었습니다.`);
+            }
+
+            if (!db) return;
+
+            currentRef = ref(db, `nodo_status/${today}`);
+            onValue(currentRef, (snapshot) => {
+                soldiersData = snapshot.val() || {};
+                updateSyncBadge(true);
+                renderDashboard();
+                if (myProfile) applyProfileUI();
+            }, (error) => {
+                console.error(error);
+                updateSyncBadge(false);
+            });
+        }
+
+        function updateSyncBadge(isConnected) {
+            const el = document.getElementById('sync-status');
+            if (isConnected) {
+                el.textContent = '🟢 실시간 연결됨';
+                el.className = 'text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-500/30';
+            } else {
+                el.textContent = '🔴 DB 설정 필요';
+                el.className = 'text-[10px] font-bold px-2 py-0.5 rounded-full bg-rose-500/20 text-rose-300 border border-rose-500/30';
+            }
+        }
+
+        // Firebase 키 금지 문자(., #, $, [, ], /) 치환
+        function makeSafeId(company, name) {
+            return `${company}_${name}`.replace(/[.#$\[\]\/]/g, '_');
+        }
+
+        function initFirebase() {
+            try {
+                if (!firebaseConfig.databaseURL || firebaseConfig.databaseURL.includes("여기에_")) {
+                    updateSyncBadge(false);
+                    return;
                 }
-            }, 30000);
-        };
+                const app = initializeApp(firebaseConfig);
+                db = getDatabase(app);
+                connectFirebaseForToday(false);
+            } catch (e) {
+                console.error(e);
+                updateSyncBadge(false);
+            }
+        }
 
         function updateClock() {
             const now = new Date();
@@ -314,8 +334,8 @@
             return String(now.getHours()).padStart(2, '0') + ':' + String(now.getMinutes()).padStart(2, '0');
         }
 
-        function switchTab(tab) {
-            checkDailyReset(true);
+        window.switchTab = function(tab) {
+            connectFirebaseForToday(true);
             const isSoldier = tab === 'soldier';
             document.getElementById('view-soldier').classList.toggle('hidden', !isSoldier);
             document.getElementById('view-admin').classList.toggle('hidden', isSoldier);
@@ -328,9 +348,9 @@
                 : 'py-2 text-sm font-bold rounded-lg text-slate-400 hover:text-white transition';
 
             if (!isSoldier) renderDashboard();
-        }
+        };
 
-        function saveProfile() {
+        window.saveProfile = function() {
             const company = document.getElementById('input-company').value;
             const name = document.getElementById('input-name').value.trim();
             if (!name) {
@@ -338,12 +358,12 @@
                 return;
             }
             myProfile = { company, name };
-            localStorage.setItem(STORAGE_KEYS.PROFILE, JSON.stringify(myProfile));
+            localStorage.setItem(STORAGE_PROFILE_KEY, JSON.stringify(myProfile));
             applyProfileUI();
             showToast(`${company} ${name} 등록 완료`);
-        }
+        };
 
-        function editProfile() {
+        window.editProfile = function() {
             document.getElementById('profile-form-card').classList.remove('hidden');
             document.getElementById('profile-active-card').classList.add('hidden');
             document.getElementById('facility-buttons-wrapper').classList.add('hidden');
@@ -351,7 +371,7 @@
                 document.getElementById('input-company').value = myProfile.company;
                 document.getElementById('input-name').value = myProfile.name;
             }
-        }
+        };
 
         function applyProfileUI() {
             document.getElementById('profile-form-card').classList.add('hidden');
@@ -363,13 +383,15 @@
             badge.className = `text-xs font-extrabold px-2 py-0.5 rounded border ${COMPANY_BADGE[myProfile.company]}`;
             document.getElementById('display-name').textContent = myProfile.name;
 
-            const id = `${myProfile.company}_${myProfile.name}`;
+            const id = makeSafeId(myProfile.company, myProfile.name);
             if (soldiersData[id]) {
                 document.getElementById('display-current-loc').textContent = soldiersData[id].location;
                 document.getElementById('display-last-time').textContent = `(${soldiersData[id].time})`;
                 highlightActiveButton(soldiersData[id].location);
             } else {
-                resetSoldierStatusUI();
+                document.getElementById('display-current-loc').textContent = '미보고';
+                document.getElementById('display-last-time').textContent = '';
+                document.querySelectorAll('.facility-btn').forEach(btn => btn.classList.remove('active'));
             }
         }
 
@@ -390,32 +412,35 @@
             if (activeBtn) activeBtn.classList.add('active');
         }
 
-        function reportLocation(location) {
+        window.reportLocation = async function(location) {
             if (!myProfile) return;
-            checkDailyReset(false);
+            if (!db) {
+                alert('Firebase DB 설정이 아직 연결되지 않았습니다.');
+                return;
+            }
+            connectFirebaseForToday(false);
 
             const time = getCurrentTimeStr();
-            const id = `${myProfile.company}_${myProfile.name}`;
-
-            soldiersData[id] = {
+            const id = makeSafeId(myProfile.company, myProfile.name);
+            const payload = {
                 company: myProfile.company,
                 name: myProfile.name,
                 location: location,
-                time: time
+                time: time,
+                updatedAt: Date.now()
             };
 
-            saveSoldiersData();
+            try {
+                await set(ref(db, `nodo_status/${activeDateKey}/${id}`), payload);
+                if (navigator.vibrate) navigator.vibrate(40);
+                showToast(`📍 [${location}] 실시간 보고 완료 (${time})`);
+            } catch (err) {
+                console.error(err);
+                alert('전송 중 오류가 발생했습니다. 인터넷 연결을 확인하세요.');
+            }
+        };
 
-            document.getElementById('display-current-loc').textContent = location;
-            document.getElementById('display-last-time').textContent = `(${time})`;
-            highlightActiveButton(location);
-
-            if (navigator.vibrate) navigator.vibrate(40);
-            showToast(`📍 [${location}] 이동 보고 완료 (${time})`);
-            renderDashboard();
-        }
-
-        function setCompanyFilter(company) {
+        window.setCompanyFilter = function(company) {
             currentFilter = company;
             document.querySelectorAll('.filter-btn').forEach(btn => {
                 const isSelected = btn.dataset.filter === company;
@@ -424,12 +449,11 @@
                     : 'filter-btn px-3 py-1.5 rounded-lg text-xs font-bold bg-slate-800 text-slate-300 whitespace-nowrap';
             });
             renderDashboard();
-        }
+        };
 
-        function renderDashboard() {
-            checkDailyReset(false);
+        window.renderDashboard = function() {
             const searchQuery = document.getElementById('search-soldier').value.trim().toLowerCase();
-            const allList = Object.values(soldiersData);
+            const allList = Object.values(soldiersData || {});
 
             const filtered = allList.filter(s => {
                 const matchCompany = currentFilter === 'ALL' || s.company === currentFilter;
@@ -485,10 +509,12 @@
                     </div>
                 `;
             }).join('');
-        }
+        };
 
-        function loadSampleData() {
-            checkDailyReset(false);
+        window.loadSampleData = async function() {
+            if (!db) return alert('Firebase DB 설정을 먼저 연결해주세요.');
+            connectFirebaseForToday(false);
+
             const samples = [
                 { company: '1중대', name: '병장 김민수', location: '생활관' },
                 { company: '1중대', name: '상병 이준호', location: 'PX' },
@@ -504,22 +530,22 @@
                 { company: '본부중대', name: '병장 남주혁', location: '외박' }
             ];
             const time = getCurrentTimeStr();
+            const updates = {};
             samples.forEach(s => {
-                soldiersData[`${s.company}_${s.name}`] = { ...s, time };
+                const id = makeSafeId(s.company, s.name);
+                updates[id] = { ...s, time, updatedAt: Date.now() };
             });
-            saveSoldiersData();
-            renderDashboard();
-            showToast('가상 유동병력 12명 배치 완료');
-        }
 
-        function clearAllData() {
-            if (!confirm('상황판의 모든 병력 현황을 초기화하시겠습니까?')) return;
-            soldiersData = {};
-            saveSoldiersData();
-            resetSoldierStatusUI();
-            renderDashboard();
-            showToast('현황판 초기화 완료');
-        }
+            await update(ref(db, `nodo_status/${activeDateKey}`), updates);
+            showToast('가상 유동병력 12명 실시간 배치 완료');
+        };
+
+        window.clearAllData = async function() {
+            if (!db) return alert('Firebase DB 설정을 먼저 연결해주세요.');
+            if (!confirm('전체 상황판의 모든 병력 현황을 초기화하시겠습니까? (모든 기기에 반영됩니다)')) return;
+            await remove(ref(db, `nodo_status/${activeDateKey}`));
+            showToast('전체 현황판 초기화 완료');
+        };
 
         function showToast(msg) {
             const toast = document.getElementById('toast');
@@ -528,8 +554,18 @@
             setTimeout(() => toast.classList.add('opacity-0'), 2500);
         }
 
-        function openInstallModal() { document.getElementById('install-modal').classList.remove('hidden'); }
-        function closeInstallModal() { document.getElementById('install-modal').classList.add('hidden'); }
+        window.openInstallModal = () => document.getElementById('install-modal').classList.remove('hidden');
+        window.closeInstallModal = () => document.getElementById('install-modal').classList.add('hidden');
+
+        // 시작 실행
+        updateClock();
+        renderFacilityButtons();
+        if (myProfile) applyProfileUI();
+        renderDashboard();
+        initFirebase();
+
+        setInterval(updateClock, 1000);
+        setInterval(() => connectFirebaseForToday(true), 30000);
     </script>
 </body>
 </html>
